@@ -29,6 +29,8 @@ class MiBand5 {
   BluetoothCharacteristic? _fetchChar;
   BluetoothCharacteristic? _activityChar;
   BluetoothCharacteristic? _realtimeChar;
+  BluetoothCharacteristic? _hrChar;
+  BluetoothCharacteristic? _hrControlChar;
 
   StreamSubscription? _connSub;
   StreamSubscription? _realtimeSub;
@@ -47,6 +49,40 @@ class MiBand5 {
   }
 
   // ---------------------------------------------------------------- SCAN
+  /// Scan BLE sekilas dan kembalikan daftar device (untuk memilih band).
+  ///
+  /// [timeout] berapa lama scan berjalan. Device yang namanya kosong tetap
+  /// dikembalikan supaya band tanpa nama tetap bisa dipilih.
+  Future<List<ScanResult>> scanDevices({
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    _setState(MiBandState.scanning);
+    if (FlutterBluePlus.isScanningNow) await FlutterBluePlus.stopScan();
+
+    final found = <String, ScanResult>{};
+    final sub = FlutterBluePlus.scanResults.listen((results) {
+      for (final r in results) {
+        found[r.device.remoteId.str.toUpperCase()] = r;
+      }
+    });
+
+    try {
+      await FlutterBluePlus.startScan(timeout: timeout);
+      await Future.delayed(timeout);
+      await FlutterBluePlus.stopScan();
+    } catch (e) {
+      _log('scan error: $e');
+    } finally {
+      await sub.cancel();
+    }
+
+    final list = found.values.toList()
+      ..sort((a, b) => b.rssi.compareTo(a.rssi)); // terkuat dulu
+    _log('Scan selesai: ${list.length} device');
+    if (_state == MiBandState.scanning) _setState(MiBandState.idle);
+    return list;
+  }
+
   Future<BluetoothDevice?> scanFor(
     String mac, {
     Duration timeout = const Duration(seconds: 20),
@@ -132,6 +168,10 @@ class MiBand5 {
             services, HuamiProtocol.serviceMain, HuamiProtocol.charActivityData);
         _realtimeChar = _find(services, HuamiProtocol.serviceMain,
             HuamiProtocol.charRealtimeSteps);
+        _hrChar = _find(
+            services, HuamiProtocol.serviceMain, HuamiProtocol.charHeartRate);
+        _hrControlChar = _find(services, HuamiProtocol.serviceMain,
+            HuamiProtocol.charHeartRateControl);
 
         if (_authChar == null) {
           _log('AUTH characteristic tidak ada — bukan Mi Band 5?');
@@ -352,6 +392,54 @@ class MiBand5 {
     try {
       await _realtimeChar?.setNotifyValue(false);
     } catch (_) {}
+  }
+
+  // ------------------------------------------------------- HEART RATE
+  /// Ukur detak jantung manual sekali. Return BPM atau null bila gagal.
+  Future<int?> measureHeartRate({
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final c = _hrControlChar ?? _hrChar;
+    if (c == null) {
+      _log('Tidak ada heart rate characteristic');
+      return null;
+    }
+    final done = Completer<int?>();
+
+    final sub = c.onValueReceived.listen((v) async {
+      if (v.isEmpty) return;
+      _log('HR RX ${hexDump(v)}');
+      if (v[0] != HuamiProtocol.hrResponse) return;
+
+      // v[1] = perintah, v[2] = status/value.
+      if (v.length >= 3 &&
+          v[1] == HuamiProtocol.hrCmdStartAck &&
+          v[2] == HuamiProtocol.success) {
+        // Mulai sukses → minta lanjut.
+        await _write(c, [HuamiProtocol.hrCmdContinue, 0x01, 0x00]);
+        return;
+      }
+      // Hasil pengukuran: bpm di v[2] (0 = gagal).
+      final bpm = v.length >= 3 ? v[2] : 0;
+      if (!done.isCompleted) done.complete(bpm > 0 ? bpm : null);
+    });
+
+    try {
+      await c.setNotifyValue(true);
+      await Future.delayed(const Duration(milliseconds: 200));
+      _log('HR TX ${hexDump([HuamiProtocol.hrCmdStartManual, 0x00])}');
+      await _write(c, [HuamiProtocol.hrCmdStartManual, 0x00]);
+
+      return await done.future.timeout(timeout, onTimeout: () => null);
+    } catch (e) {
+      _log('HR error: $e');
+      return null;
+    } finally {
+      try {
+        await c.setNotifyValue(false);
+      } catch (_) {}
+      await sub.cancel();
+    }
   }
 
   // ------------------------------------------------- FETCH AKTIVITAS

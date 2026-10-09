@@ -20,6 +20,11 @@ class HuamiProtocol {
   static const String charBattery = '00000006-0000-3512-2118-0009af100700';
   /// Realtime steps.
   static const String charRealtimeSteps = '00000007-0000-3512-2118-0009af100700';
+  /// Detak jantung (manual / live).
+  static const String charHeartRate = '0000002f-0000-3512-2118-0009af100700';
+  /// Detak jantung (kontrol lanjutan).
+  static const String charHeartRateControl =
+      '0000002e-0000-3512-2118-0009af100700';
 
   // ---- Characteristics (di bawah FEE1) ----
   /// Auth char.
@@ -69,6 +74,19 @@ class HuamiProtocol {
 
   /// Mi Band 5 memakai sampel "extended" 8 byte.
   static const int activitySampleSize = 8;
+
+  // ---- Konstanta detak jantung ----
+  static const int hrResponse = 0x10;
+  /// Perintah memulai pengukuran manual.
+  static const int hrCmdStartManual = 0x01;
+  /// Perintah menghentikan pengukuran.
+  static const int hrCmdStop = 0x02;
+  /// Perintah "continue" pengukuran manual.
+  static const int hrCmdContinue = 0x03;
+  /// Sub-tipe hasil pengukuran.
+  static const int hrCmdResult = 0x02;
+  /// Sub-tipe mulai sukses.
+  static const int hrCmdStartAck = 0x01;
 }
 
 /// Satu sampel aktivitas = 1 menit data dari band.
@@ -181,3 +199,24 @@ Uint8List hexToBytes(String hex) {
 /// Cetak bytes jadi "10 02 01 ...".
 String hexDump(List<int> bytes) =>
     bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+
+/// Estimasi kalori terbakar dari langkah.
+///
+/// Pendekatan sederhana (tanpa berat/tinggi badan): ±0.04 kkal/langkah,
+/// umum dipakai untuk orang dewasa ~70 kg saat berjalan santai.
+/// (1 langkah ≈ 0.04 kkal; 10.000 langkah ≈ 400 kkal.)
+double estimateCaloriesFromSteps(int steps) => steps * 0.04;
+
+/// Estimasi kalori dari sampel aktivitas (pakai intensitas + langkah).
+///
+/// Intensitas tinggi (loncat/lari) menambah faktor pengali kecil supaya
+/// kalori yang ditampilkan terasa wajar, bukan hanya dari langkah.
+double estimateCaloriesFromSamples(Iterable<ActivitySample> samples) {
+  var kcal = 0.0;
+  for (final s in samples) {
+    kcal += s.steps * 0.04;
+    // intensitas 0..255 → tambahan maksimal ~0.02 kkal/menit saat sangat aktif.
+    kcal += (s.rawIntensity / 255.0) * 0.02;
+  }
+  return kcal;
+}

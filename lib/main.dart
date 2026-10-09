@@ -16,7 +16,7 @@ class KinetixApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Kinetix Pro',
+      title: 'Rage Fit',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       home: const MainNavigation(),

@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -27,6 +28,19 @@ class MiBandService extends ChangeNotifier {
   int todaySteps = 0;
   List<ActivitySample> samples = const [];
   String? lastError;
+
+  /// Detak jantung terakhir yang diukur (BPM), null bila belum ada.
+  int? heartRate;
+  /// Apakah sedang mengukur detak jantung.
+  bool measuringHr = false;
+  /// Kalori terbakar hari ini (kkal), diturunkan dari data band.
+  double todayCalories = 0;
+
+  /// Ringkasan tidur semalam (diturunkan dari sampel aktivitas).
+  Duration sleepDuration = Duration.zero;
+  Duration deepSleep = Duration.zero;
+  Duration remSleep = Duration.zero;
+  Duration lightSleep = Duration.zero;
 
   /// true kalau mac & key berasal dari input user (bukan default).
   bool _hasSaved = false;
@@ -145,6 +159,51 @@ class MiBandService extends ChangeNotifier {
     return loc.isGranted;
   }
 
+  /// Minta izin Bluetooth + lokasi. Return true kalau boleh scan/connect.
+  Future<bool> requestPermissions() => _requestPermissions();
+
+  /// Scan device BLE di sekitar (untuk popup connect).
+  Future<List<ScanResult>> scanDevices({
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    await _requestPermissions();
+    return _band.scanDevices(timeout: timeout);
+  }
+
+  /// Connect + auth ke device yang dipilih dari popup scan, memakai key
+  /// yang diketik user. Simpan credential supaya tidak perlu isi ulang.
+  Future<bool> connectToDevice(BluetoothDevice device, String keyHex) async {
+    lastError = null;
+    notifyListeners();
+
+    final bytes = _tryParseKey(keyHex);
+    if (bytes == null) {
+      lastError = 'Auth key tidak valid (harus 32 digit hex / 16 byte).';
+      notifyListeners();
+      return false;
+    }
+
+    if (!await _band.connect(device)) {
+      lastError = 'Gagal connect ke ${device.remoteId.str}.';
+      notifyListeners();
+      return false;
+    }
+
+    if (!await _band.authenticate(bytes)) {
+      lastError = 'Auth gagal — cek auth key (pastikan key diambil SETELAH '
+          'pairing terakhir & band belum di-factory-reset)';
+      notifyListeners();
+      return false;
+    }
+
+    // Simpan credential pilihan user.
+    await saveCredentials(device.remoteId.str, '0x${_bytesToHex(bytes)}');
+
+    await _band.startRealtimeSteps();
+    notifyListeners();
+    return true;
+  }
+
   Future<bool> connectAndAuth() async {
     lastError = null;
     notifyListeners();
@@ -197,6 +256,26 @@ class MiBandService extends ChangeNotifier {
     return true;
   }
 
+  /// Ukur detak jantung manual sekarang. Update [heartRate] bila berhasil.
+  Future<int?> measureHeartRate() async {
+    if (!ready) {
+      lastError = 'Band belum terhubung.';
+      notifyListeners();
+      return null;
+    }
+    measuringHr = true;
+    notifyListeners();
+    try {
+      final bpm = await _band.measureHeartRate();
+      if (bpm != null) heartRate = bpm;
+      if (bpm == null) lastError = 'Gagal mengukur detak jantung.';
+      return bpm;
+    } finally {
+      measuringHr = false;
+      notifyListeners();
+    }
+  }
+
   Future<void> fetchToday() async {
     lastError = null;
     notifyListeners();
@@ -205,7 +284,47 @@ class MiBandService extends ChangeNotifier {
     final list = await _band.fetchActivitySince(midnight);
     samples = list;
     todaySteps = list.fold<int>(0, (a, s) => a + s.steps);
+    todayCalories = estimateCaloriesFromSamples(list);
+    // Ambil HR terakhir dari sampel kalau belum diukur manual.
+    heartRate ??= _lastHr(list);
     notifyListeners();
+  }
+
+  /// Ambil ringkasan tidur semalam (dari tengah malam kemarin s/d sekarang).
+  Future<void> fetchSleep() async {
+    lastError = null;
+    notifyListeners();
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day)
+        .subtract(const Duration(hours: 18)); // mulai dari sore kemarin
+    final list = await _band.fetchActivitySince(start);
+    _computeSleep(list);
+    notifyListeners();
+  }
+
+  void _computeSleep(List<ActivitySample> list) {
+    var deep = 0, rem = 0, light = 0;
+    for (final s in list) {
+      if (s.deepSleep > 0) {
+        deep++;
+      } else if (s.remSleep > 0) {
+        rem++;
+      } else if (s.sleep > 0) {
+        light++;
+      }
+    }
+    deepSleep = Duration(minutes: deep);
+    remSleep = Duration(minutes: rem);
+    lightSleep = Duration(minutes: light);
+    sleepDuration = deepSleep + remSleep + lightSleep;
+    if (sleepDuration > Duration.zero) samples = list;
+  }
+
+  int? _lastHr(List<ActivitySample> list) {
+    for (final s in list.reversed) {
+      if (s.heartRate > 0) return s.heartRate;
+    }
+    return null;
   }
 
   Future<void> disconnect() async {
