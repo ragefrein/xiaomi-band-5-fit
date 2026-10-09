@@ -1,0 +1,28 @@
+<!--
+  Merge these into your existing android/app/src/main/AndroidManifest.xml
+  (add the <uses-permission> lines inside <manifest>, above <application>).
+
+  Android 12+ (API 31+) uses the new Bluetooth permissions.
+  Android <12 needs legacy Bluetooth + location.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Android 12+ -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- Android <= 11 -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="30" />
+
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
+
+    <application>
+        <!-- your existing application content goes here -->
+    </application>
+</manifest>

@@ -1,0 +1,26 @@
+name: miband5_app
+description: Custom Mi Band 5 companion app (Flutter, BLE + Huami auth)
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # BLE. Pin a specific version for stability.
+  flutter_blue_plus: ^1.35.5
+  # AES-128-ECB for the Huami auth handshake
+  pointycastle: ^3.9.1
+  # Store the 16-byte auth key securely (Android Keystore / iOS Keychain)
+  flutter_secure_storage: ^9.2.2
+  permission_handler: ^11.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
