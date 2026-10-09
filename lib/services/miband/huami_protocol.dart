@@ -10,6 +10,8 @@ class HuamiProtocol {
   // ---- GATT services ----
   static const String serviceMain = '0000fee0-0000-1000-8000-00805f9b34fb';
   static const String serviceAuth = '0000fee1-0000-1000-8000-00805f9b34fb';
+  /// Standard SIG Heart Rate Service (dipakai band untuk live/manual HR).
+  static const String serviceHeartRate = '0000180d-0000-1000-8000-00805f9b34fb';
 
   // ---- Characteristics (di bawah FEE0) ----
   /// Fetch/control char (dipakai untuk trigger & ack fetch aktivitas).
@@ -20,11 +22,12 @@ class HuamiProtocol {
   static const String charBattery = '00000006-0000-3512-2118-0009af100700';
   /// Realtime steps.
   static const String charRealtimeSteps = '00000007-0000-3512-2118-0009af100700';
-  /// Detak jantung: char NILAI (notifikasi BPM masuk ke sini).
-  static const String charHeartRate = '0000002f-0000-3512-2118-0009af100700';
-  /// Detak jantung: char KONTROL pengukuran (kirim perintah start/stop).
-  static const String charHeartRateControl =
-      '0000002e-0000-3512-2118-0009af100700';
+  /// Konfigurasi — start/stop pengukuran HR manual dikirim ke sini.
+  static const String charConfiguration =
+      '00000003-0000-3512-2118-0009af100700';
+  /// Standard SIG Heart Rate Measurement (notifikasi BPM masuk ke sini).
+  static const String charHeartRateMeasurement =
+      '00002a37-0000-1000-8000-00805f9b34fb';
 
   // ---- Characteristics (di bawah FEE1) ----
   /// Auth char.
@@ -76,20 +79,12 @@ class HuamiProtocol {
   static const int activitySampleSize = 8;
 
   // ---- Konstanta detak jantung ----
-  /// Header response Huami.
-  static const int hrResponse = 0x10;
-  /// Perintah memulai pengukuran manual (ke char kontrol).
-  static const int hrCmdStartManual = 0x15;
+  /// Endpoint pengukuran HR manual (byte pertama perintah ke char konfigurasi).
+  static const int hrEndpoint = 0x15;
   /// Sub-aksi "start".
   static const int hrSubStart = 0x01;
   /// Sub-aksi "stop".
   static const int hrSubStop = 0x02;
-  /// Sub-aksi "continue" (lanjutkan setelah ack start).
-  static const int hrSubContinue = 0x03;
-  /// Sub-tipe hasil pengukuran pada notifikasi.
-  static const int hrCmdResult = 0x02;
-  /// Sub-tipe mulai sukses pada notifikasi.
-  static const int hrCmdStartAck = 0x01;
 }
 
 /// Satu sampel aktivitas = 1 menit data dari band.

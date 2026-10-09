@@ -29,8 +29,8 @@ class MiBand5 {
   BluetoothCharacteristic? _fetchChar;
   BluetoothCharacteristic? _activityChar;
   BluetoothCharacteristic? _realtimeChar;
-  BluetoothCharacteristic? _hrChar;
-  BluetoothCharacteristic? _hrControlChar;
+  BluetoothCharacteristic? _hrChar; // standard 0x2A37 (nilai BPM)
+  BluetoothCharacteristic? _configChar; // 0x0003 (start/stop HR manual)
 
   StreamSubscription? _connSub;
   StreamSubscription? _realtimeSub;
@@ -168,10 +168,14 @@ class MiBand5 {
             services, HuamiProtocol.serviceMain, HuamiProtocol.charActivityData);
         _realtimeChar = _find(services, HuamiProtocol.serviceMain,
             HuamiProtocol.charRealtimeSteps);
-        _hrChar = _find(
-            services, HuamiProtocol.serviceMain, HuamiProtocol.charHeartRate);
-        _hrControlChar = _find(services, HuamiProtocol.serviceMain,
-            HuamiProtocol.charHeartRateControl);
+        _configChar = _find(services, HuamiProtocol.serviceMain,
+            HuamiProtocol.charConfiguration);
+        _hrChar = _find(services, HuamiProtocol.serviceHeartRate,
+            HuamiProtocol.charHeartRateMeasurement);
+
+        // Ringkas info char HR untuk debug.
+        _log('HR char 0x2A37: ${_hrChar != null ? "ADA" : "TIDAK ADA"} | '
+            'config 0x0003: ${_configChar != null ? "ADA" : "TIDAK ADA"}');
 
         if (_authChar == null) {
           _log('AUTH characteristic tidak ada — bukan Mi Band 5?');
@@ -398,89 +402,76 @@ class MiBand5 {
   /// Ukur detak jantung manual sekali. Return BPM atau null bila gagal.
   ///
   /// Alur protokol Huami (Mi Band 5):
-  ///  - Subscribe notifikasi di char NILAI (0x2f).
-  ///  - Kirim `[0x15, 0x01, 0x00]` (start) ke char KONTROL (0x2e).
-  ///  - Band balas `[0x10, 0x01, 0x01]` (ack) → kirim `[0x15, 0x03, 0x00]`
-  ///    (continue) ke char KONTROL.
-  ///  - Selama ~10-15 detik band kirim `[0x10, 0x02, <bpm>]` ke char NILAI.
-  ///    bpm 0 = belum siap, nilai >0 = hasil akhir.
+  ///  - Subscribe notifikasi di standard HR Service `0x180D` / char `0x2A37`.
+  ///  - Kirim `[0x15, 0x01, 0x00]` (start manual) ke char Konfigurasi `0x0003`.
+  ///  - Selama ~10-15 detik band kirim BPM ke `0x2A37`.
+  ///  - Kirim `[0x15, 0x02, 0x00]` (stop) saat selesai.
+  ///
+  /// Format notifikasi `0x2A37` (SIG): byte0 = flags, byte1 = BPM (uint8) bila
+  /// bit0 flags == 0, atau byte1..2 = BPM (uint16 LE) bila bit0 == 1.
   Future<int?> measureHeartRate({
-    Duration timeout = const Duration(seconds: 25),
+    Duration timeout = const Duration(seconds: 30),
   }) async {
-    final value = _hrChar; // 0x2f — notifikasi BPM
-    final control = _hrControlChar ?? _hrChar; // 0x2e — kirim perintah
-    if (value == null || control == null) {
-      _log('Tidak ada heart rate characteristic');
+    final value = _hrChar; // 0x2A37 (standard HR)
+    final control = _configChar ?? _fetchChar; // 0x0003 (start/stop)
+    if (value == null) {
+      _log('Tidak ada standard HR characteristic (0x180D/0x2A37)');
       return null;
     }
     final done = Completer<int?>();
+    int? lastBpm;
 
     final valueSub = value.onValueReceived.listen((v) {
       if (v.isEmpty) return;
-      _log('HR RX ${hexDump(v)}');
-      if (v[0] != HuamiProtocol.hrResponse) return;
-      // v[1] = sub-tipe, v[2+] = data.
-      if (v.length >= 3 && v[1] == HuamiProtocol.hrCmdResult) {
-        final bpm = v[2] & 0xff;
-        if (bpm > 0 && !done.isCompleted) done.complete(bpm);
-      }
-    });
-
-    final ackSub = control.onValueReceived.listen((v) async {
-      if (v.isEmpty) return;
-      _log('HR CTRL RX ${hexDump(v)}');
-      if (v[0] != HuamiProtocol.hrResponse) return;
-      // Ack start → minta band lanjut mengukur.
-      if (v.length >= 3 &&
-          v[1] == HuamiProtocol.hrCmdStartAck &&
-          !done.isCompleted) {
-        await _write(control, [
-          HuamiProtocol.hrCmdStartManual,
-          HuamiProtocol.hrSubContinue,
-          0x00,
-        ]);
+      final bpm = _parseHrMeasurement(v);
+      _log('HR RX ${hexDump(v)} → $bpm bpm');
+      if (bpm != null && bpm > 0) {
+        lastBpm = bpm;
+        if (!done.isCompleted) done.complete(bpm);
       }
     });
 
     try {
       await value.setNotifyValue(true);
-      try {
-        await control.setNotifyValue(true);
-      } catch (_) {}
       await Future.delayed(const Duration(milliseconds: 300));
 
-      final start = [
-        HuamiProtocol.hrCmdStartManual,
-        HuamiProtocol.hrSubStart,
-        0x00,
-      ];
-      _log('HR TX ${hexDump(start)}');
-      await _write(control, start);
+      if (control != null) {
+        final start = [HuamiProtocol.hrEndpoint, HuamiProtocol.hrSubStart, 0x00];
+        _log('HR TX ${hexDump(start)}');
+        await _write(control, start);
+      } else {
+        _log('Tidak ada char kontrol (0x0003) — andalkan notifikasi pasif');
+      }
 
       return await done.future.timeout(timeout, onTimeout: () {
-        _log('HR timeout');
-        return null;
+        _log('HR timeout (bpm terakhir: $lastBpm)');
+        return lastBpm;
       });
     } catch (e) {
       _log('HR error: $e');
-      return null;
+      return lastBpm;
     } finally {
-      try {
-        await _write(control, [
-          HuamiProtocol.hrCmdStartManual,
-          HuamiProtocol.hrSubStop,
-          0x00,
-        ]);
-      } catch (_) {}
+      if (control != null) {
+        try {
+          await _write(
+              control, [HuamiProtocol.hrEndpoint, HuamiProtocol.hrSubStop, 0x00]);
+        } catch (_) {}
+      }
       try {
         await value.setNotifyValue(false);
       } catch (_) {}
-      try {
-        await control.setNotifyValue(false);
-      } catch (_) {}
       await valueSub.cancel();
-      await ackSub.cancel();
     }
+  }
+
+  /// Parse notifikasi standard HR `0x2A37` (SIG).
+  int? _parseHrMeasurement(List<int> v) {
+    if (v.isEmpty) return null;
+    final flags = v[0];
+    if (flags & 0x01 == 0) {
+      return v.length >= 2 ? v[1] & 0xff : null;
+    }
+    return v.length >= 3 ? (v[1] & 0xff) | ((v[2] & 0xff) << 8) : null;
   }
 
   // ------------------------------------------------- FETCH AKTIVITAS

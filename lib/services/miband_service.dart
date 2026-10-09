@@ -267,7 +267,14 @@ class MiBandService extends ChangeNotifier {
     lastError = null;
     notifyListeners();
     try {
-      final bpm = await _band.measureHeartRate();
+      var bpm = await _band.measureHeartRate();
+      // Fallback: kalau live gagal, ambil HR terakhir dari sampel aktivitas.
+      if (bpm == null) {
+        if (samples.isEmpty) {
+          await fetchToday();
+        }
+        bpm = _lastHr(samples);
+      }
       if (bpm != null) {
         heartRate = bpm;
         lastError = null;
