@@ -401,16 +401,17 @@ class MiBand5 {
   // ------------------------------------------------------- HEART RATE
   /// Ukur detak jantung manual sekali. Return BPM atau null bila gagal.
   ///
-  /// Alur protokol Huami (Mi Band 5):
-  ///  - Subscribe notifikasi di standard HR Service `0x180D` / char `0x2A37`.
-  ///  - Kirim `[0x15, 0x01, 0x00]` (start manual) ke char Konfigurasi `0x0003`.
-  ///  - Selama ~10-15 detik band kirim BPM ke `0x2A37`.
-  ///  - Kirim `[0x15, 0x02, 0x00]` (stop) saat selesai.
+  /// Alur protokol Huami (Mi Band 5), mengikuti Gadgetbridge:
+  ///  1. Aktifkan HR connection: `06 1f 00 01` ke char konfigurasi `0x0003`.
+  ///  2. Subscribe notifikasi di standard HR Service `0x180D` / char `0x2A37`.
+  ///  3. Kirim `15 01 00` (start manual) ke char `0x0003`.
+  ///  4. Band streaming BPM ke `0x2A37` selama beberapa detik.
+  ///  5. Kirim `15 02 00` (stop) saat selesai.
   ///
   /// Format notifikasi `0x2A37` (SIG): byte0 = flags, byte1 = BPM (uint8) bila
   /// bit0 flags == 0, atau byte1..2 = BPM (uint16 LE) bila bit0 == 1.
   Future<int?> measureHeartRate({
-    Duration timeout = const Duration(seconds: 30),
+    Duration timeout = const Duration(seconds: 35),
   }) async {
     final value = _hrChar; // 0x2A37 (standard HR)
     final control = _configChar ?? _fetchChar; // 0x0003 (start/stop)
@@ -432,9 +433,22 @@ class MiBand5 {
     });
 
     try {
-      await value.setNotifyValue(true);
-      await Future.delayed(const Duration(milliseconds: 300));
+      // 1) Aktifkan HR connection dulu (kalau ada char konfigurasi).
+      if (control != null) {
+        _log('HR TX ctrl ${hexDump(HuamiProtocol.cmdEnableHrConnection)}');
+        try {
+          await _write(control, HuamiProtocol.cmdEnableHrConnection);
+        } catch (e) {
+          _log('Gagal enable HR conn: $e');
+        }
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
 
+      // 2) Subscribe notifikasi HR.
+      await value.setNotifyValue(true);
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // 3) Start pengukuran manual.
       if (control != null) {
         final start = [HuamiProtocol.hrEndpoint, HuamiProtocol.hrSubStart, 0x00];
         _log('HR TX ${hexDump(start)}');

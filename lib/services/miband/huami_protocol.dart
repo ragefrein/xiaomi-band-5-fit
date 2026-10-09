@@ -85,6 +85,13 @@ class HuamiProtocol {
   static const int hrSubStart = 0x01;
   /// Sub-aksi "stop".
   static const int hrSubStop = 0x02;
+
+  /// Endpoint "display/config" (byte pertama untuk setelan display & HR conn).
+  static const int endpointDisplay = 0x06;
+  /// Perintah aktifkan koneksi HR (3rd party realtime HR access).
+  /// `06 1f 00 01` → enable, `06 1f 00 00` → disable. (Gadgetbridge)
+  static const List<int> cmdEnableHrConnection = [0x06, 0x1f, 0x00, 0x01];
+  static const List<int> cmdDisableHrConnection = [0x06, 0x1f, 0x00, 0x00];
 }
 
 /// Satu sampel aktivitas = 1 menit data dari band.
