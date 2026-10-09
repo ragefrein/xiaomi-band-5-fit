@@ -20,9 +20,9 @@ class HuamiProtocol {
   static const String charBattery = '00000006-0000-3512-2118-0009af100700';
   /// Realtime steps.
   static const String charRealtimeSteps = '00000007-0000-3512-2118-0009af100700';
-  /// Detak jantung (manual / live).
+  /// Detak jantung: char NILAI (notifikasi BPM masuk ke sini).
   static const String charHeartRate = '0000002f-0000-3512-2118-0009af100700';
-  /// Detak jantung (kontrol lanjutan).
+  /// Detak jantung: char KONTROL pengukuran (kirim perintah start/stop).
   static const String charHeartRateControl =
       '0000002e-0000-3512-2118-0009af100700';
 
@@ -76,16 +76,19 @@ class HuamiProtocol {
   static const int activitySampleSize = 8;
 
   // ---- Konstanta detak jantung ----
+  /// Header response Huami.
   static const int hrResponse = 0x10;
-  /// Perintah memulai pengukuran manual.
-  static const int hrCmdStartManual = 0x01;
-  /// Perintah menghentikan pengukuran.
-  static const int hrCmdStop = 0x02;
-  /// Perintah "continue" pengukuran manual.
-  static const int hrCmdContinue = 0x03;
-  /// Sub-tipe hasil pengukuran.
+  /// Perintah memulai pengukuran manual (ke char kontrol).
+  static const int hrCmdStartManual = 0x15;
+  /// Sub-aksi "start".
+  static const int hrSubStart = 0x01;
+  /// Sub-aksi "stop".
+  static const int hrSubStop = 0x02;
+  /// Sub-aksi "continue" (lanjutkan setelah ack start).
+  static const int hrSubContinue = 0x03;
+  /// Sub-tipe hasil pengukuran pada notifikasi.
   static const int hrCmdResult = 0x02;
-  /// Sub-tipe mulai sukses.
+  /// Sub-tipe mulai sukses pada notifikasi.
   static const int hrCmdStartAck = 0x01;
 }
 

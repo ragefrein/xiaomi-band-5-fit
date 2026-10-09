@@ -264,11 +264,17 @@ class MiBandService extends ChangeNotifier {
       return null;
     }
     measuringHr = true;
+    lastError = null;
     notifyListeners();
     try {
       final bpm = await _band.measureHeartRate();
-      if (bpm != null) heartRate = bpm;
-      if (bpm == null) lastError = 'Gagal mengukur detak jantung.';
+      if (bpm != null) {
+        heartRate = bpm;
+        lastError = null;
+      } else {
+        lastError = 'Pengukuran belum berhasil. Pastikan band dipakai di '
+            'pergelangan tangan & tunggu beberapa detik, lalu coba lagi.';
+      }
       return bpm;
     } finally {
       measuringHr = false;

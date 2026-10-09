@@ -167,7 +167,7 @@ class _HomeScreenState extends State<HomeScreen> {
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Halo, Rian! 🔥',
+            Text('Halo 🔥',
                 style: Theme.of(context).textTheme.displaySmall),
             Text('Target harianmu hampir tercapai!',
                 style: Theme.of(context).textTheme.bodyMedium),
@@ -469,7 +469,17 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 8),
           GestureDetector(
             onTap: (_svc.ready && !_svc.measuringHr)
-                ? () => _svc.measureHeartRate()
+                ? () async {
+                    final bpm = await _svc.measureHeartRate();
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(bpm != null
+                            ? 'Detak jantung: $bpm BPM'
+                            : (_svc.lastError ?? 'Gagal mengukur.')),
+                      ),
+                    );
+                  }
                 : null,
             child: Container(
               width: double.infinity,

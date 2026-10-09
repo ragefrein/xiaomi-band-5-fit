@@ -396,49 +396,90 @@ class MiBand5 {
 
   // ------------------------------------------------------- HEART RATE
   /// Ukur detak jantung manual sekali. Return BPM atau null bila gagal.
+  ///
+  /// Alur protokol Huami (Mi Band 5):
+  ///  - Subscribe notifikasi di char NILAI (0x2f).
+  ///  - Kirim `[0x15, 0x01, 0x00]` (start) ke char KONTROL (0x2e).
+  ///  - Band balas `[0x10, 0x01, 0x01]` (ack) → kirim `[0x15, 0x03, 0x00]`
+  ///    (continue) ke char KONTROL.
+  ///  - Selama ~10-15 detik band kirim `[0x10, 0x02, <bpm>]` ke char NILAI.
+  ///    bpm 0 = belum siap, nilai >0 = hasil akhir.
   Future<int?> measureHeartRate({
-    Duration timeout = const Duration(seconds: 20),
+    Duration timeout = const Duration(seconds: 25),
   }) async {
-    final c = _hrControlChar ?? _hrChar;
-    if (c == null) {
+    final value = _hrChar; // 0x2f — notifikasi BPM
+    final control = _hrControlChar ?? _hrChar; // 0x2e — kirim perintah
+    if (value == null || control == null) {
       _log('Tidak ada heart rate characteristic');
       return null;
     }
     final done = Completer<int?>();
 
-    final sub = c.onValueReceived.listen((v) async {
+    final valueSub = value.onValueReceived.listen((v) {
       if (v.isEmpty) return;
       _log('HR RX ${hexDump(v)}');
       if (v[0] != HuamiProtocol.hrResponse) return;
+      // v[1] = sub-tipe, v[2+] = data.
+      if (v.length >= 3 && v[1] == HuamiProtocol.hrCmdResult) {
+        final bpm = v[2] & 0xff;
+        if (bpm > 0 && !done.isCompleted) done.complete(bpm);
+      }
+    });
 
-      // v[1] = perintah, v[2] = status/value.
+    final ackSub = control.onValueReceived.listen((v) async {
+      if (v.isEmpty) return;
+      _log('HR CTRL RX ${hexDump(v)}');
+      if (v[0] != HuamiProtocol.hrResponse) return;
+      // Ack start → minta band lanjut mengukur.
       if (v.length >= 3 &&
           v[1] == HuamiProtocol.hrCmdStartAck &&
-          v[2] == HuamiProtocol.success) {
-        // Mulai sukses → minta lanjut.
-        await _write(c, [HuamiProtocol.hrCmdContinue, 0x01, 0x00]);
-        return;
+          !done.isCompleted) {
+        await _write(control, [
+          HuamiProtocol.hrCmdStartManual,
+          HuamiProtocol.hrSubContinue,
+          0x00,
+        ]);
       }
-      // Hasil pengukuran: bpm di v[2] (0 = gagal).
-      final bpm = v.length >= 3 ? v[2] : 0;
-      if (!done.isCompleted) done.complete(bpm > 0 ? bpm : null);
     });
 
     try {
-      await c.setNotifyValue(true);
-      await Future.delayed(const Duration(milliseconds: 200));
-      _log('HR TX ${hexDump([HuamiProtocol.hrCmdStartManual, 0x00])}');
-      await _write(c, [HuamiProtocol.hrCmdStartManual, 0x00]);
+      await value.setNotifyValue(true);
+      try {
+        await control.setNotifyValue(true);
+      } catch (_) {}
+      await Future.delayed(const Duration(milliseconds: 300));
 
-      return await done.future.timeout(timeout, onTimeout: () => null);
+      final start = [
+        HuamiProtocol.hrCmdStartManual,
+        HuamiProtocol.hrSubStart,
+        0x00,
+      ];
+      _log('HR TX ${hexDump(start)}');
+      await _write(control, start);
+
+      return await done.future.timeout(timeout, onTimeout: () {
+        _log('HR timeout');
+        return null;
+      });
     } catch (e) {
       _log('HR error: $e');
       return null;
     } finally {
       try {
-        await c.setNotifyValue(false);
+        await _write(control, [
+          HuamiProtocol.hrCmdStartManual,
+          HuamiProtocol.hrSubStop,
+          0x00,
+        ]);
       } catch (_) {}
-      await sub.cancel();
+      try {
+        await value.setNotifyValue(false);
+      } catch (_) {}
+      try {
+        await control.setNotifyValue(false);
+      } catch (_) {}
+      await valueSub.cancel();
+      await ackSub.cancel();
     }
   }
 
