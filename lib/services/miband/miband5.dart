@@ -30,7 +30,8 @@ class MiBand5 {
   BluetoothCharacteristic? _activityChar;
   BluetoothCharacteristic? _realtimeChar;
   BluetoothCharacteristic? _hrChar; // standard 0x2A37 (nilai BPM)
-  BluetoothCharacteristic? _configChar; // 0x0003 (start/stop HR manual)
+  BluetoothCharacteristic? _hrControlChar; // standard 0x2A39 (HR control point)
+  BluetoothCharacteristic? _configChar; // 0x0003 (config band, mis. enable HR)
 
   StreamSubscription? _connSub;
   StreamSubscription? _realtimeSub;
@@ -172,9 +173,12 @@ class MiBand5 {
             HuamiProtocol.charConfiguration);
         _hrChar = _find(services, HuamiProtocol.serviceHeartRate,
             HuamiProtocol.charHeartRateMeasurement);
+        _hrControlChar = _find(services, HuamiProtocol.serviceHeartRate,
+            HuamiProtocol.charHeartRateControlPoint);
 
         // Ringkas info char HR untuk debug.
         _log('HR char 0x2A37: ${_hrChar != null ? "ADA" : "TIDAK ADA"} | '
+            'ctrl 0x2A39: ${_hrControlChar != null ? "ADA" : "TIDAK ADA"} | '
             'config 0x0003: ${_configChar != null ? "ADA" : "TIDAK ADA"}');
 
         if (_authChar == null) {
@@ -401,61 +405,70 @@ class MiBand5 {
   // ------------------------------------------------------- HEART RATE
   /// Ukur detak jantung manual sekali. Return BPM atau null bila gagal.
   ///
-  /// Alur protokol Huami (Mi Band 5), mengikuti Gadgetbridge:
-  ///  1. Aktifkan HR connection: `06 1f 00 01` ke char konfigurasi `0x0003`.
-  ///  2. Subscribe notifikasi di standard HR Service `0x180D` / char `0x2A37`.
-  ///  3. Kirim `15 01 00` (start manual) ke char `0x0003`.
-  ///  4. Band streaming BPM ke `0x2A37` selama beberapa detik.
+  /// Alur protokol Huami (Mi Band 5) mengikuti Gadgetbridge:
+  ///  1. (Opsional) enable HR connection `06 1f 00 01` ke char config `0x0003`.
+  ///  2. Subscribe notifikasi di char HR `0x2A37` DAN control point `0x2A39`.
+  ///  3. Kirim `15 02 01` (start MANUAL) ke **HR Control Point `0x2A39`**.
+  ///  4. Band streaming BPM (di `0x2A37` dan/atau `0x2A39`).
   ///  5. Kirim `15 02 00` (stop) saat selesai.
   ///
-  /// Format notifikasi `0x2A37` (SIG): byte0 = flags, byte1 = BPM (uint8) bila
-  /// bit0 flags == 0, atau byte1..2 = BPM (uint16 LE) bila bit0 == 1.
+  /// (Gadgetbridge: `startHeartMeasurementManual = {0x15, 0x02, 1}` —
+  ///  `COMMAND_SET_HR_MANUAL = 0x02`, byte terakhir 1=start / 0=stop.)
   Future<int?> measureHeartRate({
     Duration timeout = const Duration(seconds: 35),
   }) async {
-    final value = _hrChar; // 0x2A37 (standard HR)
-    final control = _configChar ?? _fetchChar; // 0x0003 (start/stop)
-    if (value == null) {
-      _log('Tidak ada standard HR characteristic (0x180D/0x2A37)');
+    final value = _hrChar; // 0x2A37 (notifikasi BPM)
+    final control = _hrControlChar; // 0x2A39 (HR control point)
+    if (value == null && control == null) {
+      _log('Tidak ada HR characteristic (0x2A37 / 0x2A39)');
       return null;
     }
     final done = Completer<int?>();
     int? lastBpm;
 
-    final valueSub = value.onValueReceived.listen((v) {
+    void onData(List<int> v, String tag) {
       if (v.isEmpty) return;
       final bpm = _parseHrMeasurement(v);
-      _log('HR RX ${hexDump(v)} → $bpm bpm');
+      _log('HR RX [$tag] ${hexDump(v)} → $bpm bpm');
       if (bpm != null && bpm > 0) {
         lastBpm = bpm;
         if (!done.isCompleted) done.complete(bpm);
       }
-    });
+    }
+
+    final valueSub = value?.onValueReceived.listen((v) => onData(v, '2a37'));
+    final ctrlSub = control?.onValueReceived.listen((v) => onData(v, '2a39'));
 
     try {
-      // 1) Aktifkan HR connection dulu (kalau ada char konfigurasi).
-      if (control != null) {
-        _log('HR TX ctrl ${hexDump(HuamiProtocol.cmdEnableHrConnection)}');
+      // 1) Enable HR connection (kalau ada config char).
+      if (_configChar != null) {
+        _log('HR TX cfg ${hexDump(HuamiProtocol.cmdEnableHrConnection)}');
         try {
-          await _write(control, HuamiProtocol.cmdEnableHrConnection);
+          await _write(_configChar!, HuamiProtocol.cmdEnableHrConnection);
+          await Future.delayed(const Duration(milliseconds: 300));
         } catch (e) {
           _log('Gagal enable HR conn: $e');
         }
-        await Future.delayed(const Duration(milliseconds: 500));
       }
 
-      // 2) Subscribe notifikasi HR.
-      await value.setNotifyValue(true);
-      await Future.delayed(const Duration(milliseconds: 500));
+      // 2) Subscribe notifikasi pada kedua char.
+      try {
+        await value?.setNotifyValue(true);
+      } catch (_) {}
+      try {
+        await control?.setNotifyValue(true);
+      } catch (_) {}
+      await Future.delayed(const Duration(milliseconds: 400));
 
-      // 3) Start pengukuran manual.
-      if (control != null) {
-        final start = [HuamiProtocol.hrEndpoint, HuamiProtocol.hrSubStart, 0x00];
-        _log('HR TX ${hexDump(start)}');
-        await _write(control, start);
-      } else {
-        _log('Tidak ada char kontrol (0x0003) — andalkan notifikasi pasif');
-      }
+      // 3) Start pengukuran manual ke HR Control Point 0x2A39.
+      final target = control ?? value!;
+      final start = [
+        HuamiProtocol.hrEndpoint,
+        HuamiProtocol.hrManual,
+        HuamiProtocol.hrStart,
+      ];
+      _log('HR TX ${hexDump(start)} → ${control != null ? "2a39" : "2a37"}');
+      await _write(target, start);
 
       return await done.future.timeout(timeout, onTimeout: () {
         _log('HR timeout (bpm terakhir: $lastBpm)');
@@ -467,14 +480,18 @@ class MiBand5 {
     } finally {
       if (control != null) {
         try {
-          await _write(
-              control, [HuamiProtocol.hrEndpoint, HuamiProtocol.hrSubStop, 0x00]);
+          await _write(control,
+              [HuamiProtocol.hrEndpoint, HuamiProtocol.hrManual, HuamiProtocol.hrStop]);
         } catch (_) {}
       }
       try {
-        await value.setNotifyValue(false);
+        await value?.setNotifyValue(false);
       } catch (_) {}
-      await valueSub.cancel();
+      try {
+        await control?.setNotifyValue(false);
+      } catch (_) {}
+      await valueSub?.cancel();
+      await ctrlSub?.cancel();
     }
   }
 

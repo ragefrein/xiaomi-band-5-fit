@@ -28,6 +28,9 @@ class HuamiProtocol {
   /// Standard SIG Heart Rate Measurement (notifikasi BPM masuk ke sini).
   static const String charHeartRateMeasurement =
       '00002a37-0000-1000-8000-00805f9b34fb';
+  /// Standard SIG Heart Rate Control Point (kirim start/stop ukur manual).
+  static const String charHeartRateControlPoint =
+      '00002a39-0000-1000-8000-00805f9b34fb';
 
   // ---- Characteristics (di bawah FEE1) ----
   /// Auth char.
@@ -79,12 +82,21 @@ class HuamiProtocol {
   static const int activitySampleSize = 8;
 
   // ---- Konstanta detak jantung ----
-  /// Endpoint pengukuran HR manual (byte pertama perintah ke char konfigurasi).
+  /// Endpoint detak jantung (byte pertama perintah HR control point).
+  ///
+  /// Diambil dari Gadgetbridge:
+  ///  - COMMAND_SET_HR_SLEEP      = 0x00
+  ///  - COMMAND_SET__HR_CONTINUOUS= 0x01
+  ///  - COMMAND_SET_HR_MANUAL     = 0x02
   static const int hrEndpoint = 0x15;
-  /// Sub-aksi "start".
-  static const int hrSubStart = 0x01;
-  /// Sub-aksi "stop".
-  static const int hrSubStop = 0x02;
+  /// Sub-aksi pengukuran MANUAL (Gadgetbridge COMMAND_SET_HR_MANUAL).
+  static const int hrManual = 0x02;
+  /// Sub-aksi pengukuran CONTINUOUS.
+  static const int hrContinuous = 0x01;
+  /// Nilai "mulai" (byte terakhir perintah HR control point).
+  static const int hrStart = 0x01;
+  /// Nilai "stop".
+  static const int hrStop = 0x00;
 
   /// Endpoint "display/config" (byte pertama untuk setelan display & HR conn).
   static const int endpointDisplay = 0x06;
